@@ -1,0 +1,4 @@
+Faker
+psycopg2-binary
+tzdata
+tqdm
