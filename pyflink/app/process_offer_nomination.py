@@ -1,35 +1,44 @@
-from pyflink.common import Row, Types
-from pyflink.table import EnvironmentSettings, StreamTableEnvironment, DataTypes, Schema
-from pyflink.datastream import FlatMapFunction, StreamExecutionEnvironment
+import random
+
+from pyflink.common import Row
+from pyflink.table.udf import udtf
+from pyflink.table import EnvironmentSettings, TableEnvironment
 import psycopg2
 import psycopg2.extras
-import argparse
-import logging
-import sys
+from datetime import datetime
+import uuid
 
-from pyflink.common import WatermarkStrategy, Encoder, Types
-from pyflink.datastream import StreamExecutionEnvironment, RuntimeExecutionMode
-from pyflink.datastream.connectors.file_system import FileSource, StreamFormat, FileSink, OutputFileConfig, RollingPolicy
+connection_params = {
+    "host": "kotel-pg",
+    "port": "5432",
+    "database": "db",
+    "user": "user",
+    "password": "password"
+}
 
+env_settings = EnvironmentSettings.in_batch_mode()
+table_env = TableEnvironment.create(env_settings)
 
+# cnums = ['Aa0BUS9', 'aa0dub9', 'aa0dXe3']
+# data = []
+# for i in range(100):
+#     data.append((i, random.choice(cnums), str(uuid.uuid4())))
+# table = table_env.from_elements(data, ['id', 'cnum', 'job_uuid'])
 
-class CustomFlatMapFunction(FlatMapFunction):
-    def __init__(self):
-        self.conn = None
+table = table_env.from_elements([
+    (1, 'Aa0BUS9'),
+    (2, 'aa0dub9'),
+    (3, 'aa0dXe3'),
+], ['id', 'cnum'])
 
-    def open(self, runtime_context):
-        self.conn = psycopg2.connect(
-            host="kotel-pg",
-            port="5432",
-            database="db",
-            user="user",
-            password="password"
-        )
-        print("Opened CustomFlatMapFunction connection ...")
+def get_offer_nominations_by_cnum(connection_params, cnum):
+    start_time = datetime.now()
+    try:
+        with psycopg2.connect(**connection_params) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cursor_time = datetime.now()
 
-    def flat_map(self, row: Row):
-        cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cur.execute(f"""
+            cur.execute(f"""
             SELECT 
                 id
                 , created_ts::text
@@ -40,63 +49,63 @@ class CustomFlatMapFunction(FlatMapFunction):
                 , start_ts::text
                 , end_ts::text
             FROM offer_nomination
-            where cnum = '{row[1]}'
+            where cnum = '{cnum}'
             and now() between start_ts and end_ts
-        """)
+            """)
 
-        result = cur.fetchall()
-        cur.close()
-        for row in result:
-            yield row['id'], row['created_ts'], row['event_id'], row['cnum'], row['camp_code'], row['action_type'], row[
-                'start_ts'], row['end_ts']
+            result = cur.fetchall()
+            end_time = datetime.now()
+
+            # print(f"conn_create_time : {cursor_time - start_time}")
+            # print(f"data_fetch_time : {end_time - cursor_time}")
+            # print(f"total_time : {end_time - start_time}")
+            # print(f"\n")
+
+            cur.close()
+
+            return result
+
+    except (Exception, psycopg2.Error) as error:
+        print("Error while connecting to PostgreSQL", error)
+        return None
 
 
-env = StreamExecutionEnvironment.get_execution_environment()
-env.set_runtime_mode(RuntimeExecutionMode.BATCH)
-env.set_parallelism(1)
+@udtf(result_types=[
+    'STRING',
+    'STRING',
+    'STRING',
+    'STRING',
+    'STRING',
+    'INT',
+    'STRING',
+    'STRING',
+])
+def get_offer_nominations_from_pg(x: Row) -> Row:
+    rows = get_offer_nominations_by_cnum(connection_params, x.cnum)
 
-data = [
-    (1, 'Aa0BUS9'),
-    (2, 'aa0dub9'),
-    (3, 'aa0dXe3'),
-]
+    for row in rows:
+        yield row['id'], row['created_ts'], row['event_id'], row['cnum'], row['camp_code'], row['action_type'], row['start_ts'], row['end_ts']
 
-cnum_processor_ds = env.from_collection(
-    collection=data,
-    type_info=Types.ROW([Types.INT(), Types.STRING()])
+
+offer_nominations_table = table.flat_map(get_offer_nominations_from_pg).alias(
+    "id",
+    "created_ts",
+    "event_id",
+    "cnum",
+    "camp_code",
+    "action_type",
+    "start_ts",
+    "end_ts"
 )
-cnum_processor_ds.print()
 
-offer_nominations_ds = cnum_processor_ds.flat_map(CustomFlatMapFunction())
-offer_nominations_ds.print()
+# result_table.execute().print()
+table_env.create_temporary_view("offer_nominations_table", offer_nominations_table)
 
-# env.create_temporary_view(
-#     "offer_nominations_table",
-#     offer_nominations_table,
-# )
-# #
-# # DataTypes.ROW([
-# #     DataTypes.FIELD("id", DataTypes.STRING()),
-# #     DataTypes.FIELD("created_ts", DataTypes.STRING()),
-# #     DataTypes.FIELD("event_id", DataTypes.STRING()),
-# #     DataTypes.FIELD("cnum", DataTypes.STRING()),
-# #     DataTypes.FIELD("camp_code", DataTypes.STRING()),
-# #     DataTypes.FIELD("action_type", DataTypes.INT()),
-# #     DataTypes.FIELD("start_ts", DataTypes.STRING()),
-# #     DataTypes.FIELD("end_ts", DataTypes.STRING())
-# # ])
-#
-#
-#
-# result = table_env.execute_sql(f"""
-#     select
-#         cnum, count(*) as camp_count
-#     from offer_nominations_table
-#     group by cnum
-# """)
+result = table_env.execute_sql(f"""
+    select 
+        cnum, count(*) as camp_count
+    from offer_nominations_table
+    group by cnum
+""")
 
-# result = env.execute_sql("select * from offer_nominations_table")
-# result.print()
-
-# Execute the job
-env.execute("DataStream from List Job")
+result.print()

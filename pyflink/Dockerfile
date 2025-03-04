@@ -1,4 +1,5 @@
-FROM apache/flink:1.18.0-scala_2.12
+# FROM apache/flink:1.18.0-scala_2.12
+FROM apache/flink:1.20.0-scala_2.12
 
 # Install Python and pip
 RUN apt-get update && apt-get install -y python3.10 python3-pip
@@ -8,7 +9,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
     && update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
 # Install PyFlink
-RUN pip install apache-flink==1.18.0
+RUN pip install apache-flink==1.20.0
 
 WORKDIR /app
 
