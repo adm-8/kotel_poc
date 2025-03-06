@@ -12,6 +12,7 @@ from pyflink.common import WatermarkStrategy, Encoder, Types
 from pyflink.datastream import StreamExecutionEnvironment, RuntimeExecutionMode
 from pyflink.datastream.connectors.kafka import KafkaSink, KafkaRecordSerializationSchema, DeliveryGuarantee
 from datetime import datetime, timezone
+import polars as pl
 
 
 class CustomFlatMapFunction(FlatMapFunction):
@@ -48,16 +49,17 @@ class CustomFlatMapFunction(FlatMapFunction):
         queue_job_created_ts = row[2]
 
         # DELETE EXISTING DATA:
+        ### PANDAS START
         cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute(f"""
         delete from customer_offer_state
-        where cnum = '{cnum}' and queue_job_id = '{queue_job_id}'::uuid
+        where cnum = '{cnum}' and queue_job_id = '{queue_job_id}'
         """)
         self.conn.commit()
         cur.close()
 
         # CALC NEW DATA:
-        source_df = pd.read_sql_query(f"""
+        query = f"""
         SELECT
             '{queue_job_id}' as queue_job_id,
             '{queue_job_created_ts}' as queue_job_created_ts,
@@ -65,35 +67,38 @@ class CustomFlatMapFunction(FlatMapFunction):
             camp_code,
             action_type
         FROM offer_nomination
-        where cnum = '{cnum}'
-        and '{queue_job_created_ts}'::timestamp between start_ts and end_ts
-        """, self.engine)
+        WHERE cnum = '{cnum}'
+        AND '{queue_job_created_ts}'::timestamp BETWEEN start_ts AND end_ts
+        """
+        source_df = pl.read_database(query, self.engine)
 
         # Group by `cnum` and `camp_code`, and compute the `camp_action` column
         grouped_df = (
-            source_df.groupby(['cnum', 'camp_code'])
-                .agg(action_type_min=('action_type', 'min'))
-                .reset_index()
+            source_df.group_by(['cnum', 'camp_code'])
+                .agg(pl.col('action_type').min().alias('action_type_min'))
         )
 
-        grouped_df['camp_action'] = grouped_df['action_type_min'].apply(
-            lambda x: 'disabled' if x == 0 else 'enabled'
+        final_df = (
+            grouped_df.with_columns([
+                pl.when(pl.col('action_type_min') == 0)
+                    .then(pl.lit('disabled'))
+                    .otherwise(pl.lit('enabled'))
+                    .alias('camp_action'),
+                pl.lit(queue_job_id).alias('queue_job_id'),
+                pl.lit(queue_job_created_ts).alias('queue_job_created_ts')
+            ])
+                .select([
+                'queue_job_id',
+                'queue_job_created_ts',
+                'cnum',
+                'camp_code',
+                'camp_action'
+            ])
         )
 
-        # Add constant columns for `queue_job_id` and `queue_job_created_ts`
-        grouped_df['queue_job_id'] = queue_job_id
-        grouped_df['queue_job_created_ts'] = queue_job_created_ts
+        # Write to database
+        final_df.write_database('customer_offer_state', self.engine, if_table_exists='append')
 
-        # Select and rename the required columns for the final DataFrame
-        final_df = grouped_df[[
-            'queue_job_id',
-            'queue_job_created_ts',
-            'cnum',
-            'camp_code',
-            'camp_action'
-        ]]
-
-        final_df.to_sql('customer_offer_state', con=self.engine, if_exists='append', index=False)
 
         yield Row(queue_job_id, cnum)
 
