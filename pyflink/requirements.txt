@@ -1,3 +1,5 @@
 Faker
 psycopg2-binary
 tzdata
+pandas
+sqlalchemy

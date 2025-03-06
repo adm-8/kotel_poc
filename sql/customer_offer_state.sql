@@ -5,9 +5,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 DROP TABLE IF EXISTS "customer_offer_state";
 
 CREATE TABLE "customer_offer_state"(
-    "id" UUID NOT NULL,
+    "id" UUID NOT NULL DEFAULT uuid_generate_v4(),
     "queue_job_id"  UUID NOT NULL,
-    "created_ts" TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+    "queue_job_created_ts" TIMESTAMP(3) NOT NULL,
+    "created_ts" TIMESTAMP(3) NOT NULL DEFAULT NOW(),
     "cnum" VARCHAR(255) NOT NULL,
     "camp_code" VARCHAR(255) NOT NULL,
     "camp_action" VARCHAR(255) NOT NULL
@@ -16,13 +17,13 @@ CREATE TABLE "customer_offer_state"(
 truncate table customer_offer_state;
 
 ALTER TABLE "customer_offer_state" ADD PRIMARY KEY("id");
-	
-CREATE INDEX idx_customer_offer_state_cnum ON customer_offer_state (cnum);
 
-CREATE INDEX idx_customer_offer_state_queue_job_id ON customer_offer_state (queue_job_id);
+CREATE UNIQUE INDEX uk_customer_offer_state ON customer_offer_state  ("cnum", "queue_job_id", "camp_code")
 
 CREATE INDEX idx_customer_offer_state_created_ts ON customer_offer_state (created_ts);
 
+
+select * from customer_offer_state;
 
 
 select count(*) from customer_offer_state;
@@ -151,5 +152,20 @@ where id in (
 	, '839d663e-2912-44fc-b7e4-98c5622c90f8'::uuid
 	, 'b07a212a-8574-46db-8198-577c56557554'::uuid
 )
+
+
+
+
+select 
+            id
+            , created_ts::text
+            , event_id
+            , cnum
+            , camp_code
+            , action_type
+            , start_ts::text
+            , end_ts::text
+     from offer_nomination
+
 
 
